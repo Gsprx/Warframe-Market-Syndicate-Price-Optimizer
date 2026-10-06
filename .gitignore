@@ -1,0 +1,6 @@
+node_modules/
+dist/
+dist-server/
+data/syndicate-items.json
+.env
+npm-debug.log*
