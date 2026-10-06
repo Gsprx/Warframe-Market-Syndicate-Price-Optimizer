@@ -11,14 +11,14 @@ type Faction =
 type RankedItem = {
   itemName: string;
   factionSyndicate: Faction;
-  platinumPerStanding: number;
+  standingPerPlatinum: number;
   standing: number;
-  lowestFourAverage: number;
+  priceAverage: number;
 };
 
 type ApiError = string;
 
-const DEFAULT_FACTIONS: Faction[] = [
+const FACTIONS: Faction[] = [
   'Steel Meridian',
   'Arbiters of Hexis',
   'Cephalon Suda',
@@ -37,7 +37,7 @@ async function api<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export default function App() {
-  const [factions, setFactions] = useState<Faction[]>(DEFAULT_FACTIONS);
+  const [factions, setFactions] = useState<Faction[]>([]);
   const [items, setItems] = useState<RankedItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -48,8 +48,8 @@ export default function App() {
 
   const summary = useMemo(() => {
     if (!items.length) return { best: null, average: 0, total: 0 };
-    const best = items.reduce((winner, item) => (item.platinumPerStanding > winner.platinumPerStanding ? item : winner));
-    const average = Math.round(items.reduce((sum, item) => sum + item.platinumPerStanding, 0) / items.length);
+    const best = items.reduce((winner, item) => (item.standingPerPlatinum < winner.standingPerPlatinum ? item : winner));
+    const average = items.reduce((sum, item) => sum + item.standingPerPlatinum, 0) / items.length;
     return { best, average, total: items.length };
   }, [items]);
 
@@ -68,15 +68,12 @@ export default function App() {
       );
       setItems(rankings.items);
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Unable to load rankings.');
+      const message = requestError instanceof Error ? requestError.message : 'Unable to load rankings.';
+      setError(message);
     } finally {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    void loadRankings();
-  }, []);
 
   const toggleFaction = (faction: Faction) => {
     setFactions((current) =>
@@ -92,7 +89,7 @@ export default function App() {
     } else {
       setItems([]);
     }
-  }, [selectedFactionCount]);
+  }, [factions]);
 
   const refreshCache = async () => {
     setRefreshing(true);
@@ -104,6 +101,8 @@ export default function App() {
       );
       setCached(response.refreshed);
       await loadRankings();
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to refresh the wiki cache.');
     } finally {
       setRefreshing(false);
     }
@@ -126,7 +125,7 @@ export default function App() {
           <div>
             <p className="label">Factions</p>
             <div className="faction-pills">
-              {DEFAULT_FACTIONS.map((faction) => (
+              {FACTIONS.map((faction) => (
                 <button
                   key={faction}
                   className={factions.includes(faction) ? 'pill active' : 'pill'}
@@ -153,12 +152,12 @@ export default function App() {
             <strong>{items.length}</strong>
           </article>
           <article className="panel stat-card">
-            <span className="stat-name">Average P/S</span>
-            <strong>{summary.average}</strong>
+            <span className="stat-name">Average Standing / Platinum</span>
+            <strong>{summary.average.toFixed(2)}</strong>
           </article>
           <article className="panel stat-card">
-            <span className="stat-name">Best result</span>
-            <strong>{summary.best ? `${summary.best.itemName} · ${summary.best.platinumPerStanding}` : '—'}</strong>
+            <span className="stat-name">Best Standing per Platinum</span>
+            <strong>{summary.best ? `${summary.best.itemName} · ${summary.best.standingPerPlatinum.toFixed(2)}` : '—'}</strong>
           </article>
         </section>
 
@@ -175,18 +174,22 @@ export default function App() {
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>ItemName</th>
-                  <th>FactionSyndicate</th>
-                  <th>PlatinumPerStanding</th>
-                  <th>Standing</th>
-                  <th>Lowest 4 Avg</th>
+                  <th>Item Name</th>
+                  <th>Faction</th>
+                  <th>Standing Cost</th>
+                  <th>Platinum Price Average</th>
+                  <th>Standing per Platinum</th>
                 </tr>
               </thead>
               <tbody>
                 {items.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="empty-row">
-                      {loading ? 'Loading syndicate offers…' : 'Select at least one faction to view results.'}
+                      {loading
+                        ? 'Loading syndicate offers…'
+                        : selectedFactionCount === 0
+                          ? 'Select at least one faction to view results.'
+                          : 'No priced offers found. Check the error above or app-debug.txt, then refresh the wiki cache if needed.'}
                     </td>
                   </tr>
                 ) : (
@@ -195,9 +198,9 @@ export default function App() {
                       <td>{index + 1}</td>
                       <td>{item.itemName}</td>
                       <td>{item.factionSyndicate}</td>
-                      <td>{item.platinumPerStanding}</td>
                       <td>{item.standing}</td>
-                      <td>{item.lowestFourAverage.toFixed(2)}</td>
+                      <td>{item.priceAverage.toFixed(2)}</td>
+                      <td>{item.standingPerPlatinum.toFixed(2)}</td>
                     </tr>
                   ))
                 )}

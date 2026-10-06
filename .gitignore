@@ -4,3 +4,4 @@ dist-server/
 data/syndicate-items.json
 .env
 npm-debug.log*
+app-debug.txt

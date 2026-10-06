@@ -15,30 +15,28 @@ export interface SyndicateItem {
 }
 
 export interface MarketOrder {
-  id: string;
-  user: { id: string; ingame_name: string };
-  platform: string;
-  region: string;
-  order_type: 'sell' | 'buy';
-  quantity: number;
+  type: 'sell' | 'buy';
   platinum: number;
   visible: boolean;
+  user: {
+    id: string;
+    status: 'ingame' | 'online' | 'offline' | string;
+  };
 }
 
 export interface MarketItem {
-  item_name: string;
-  url_name: string;
-  orders?: MarketOrder[];
+  slug: string;
+  i18n?: { en?: { name?: string } };
 }
 
 export interface MarketItemListResponse {
-  payload?: { items?: MarketItem[] };
+  data?: MarketItem[];
 }
 
 export interface RankedSyndicateItem {
   itemName: string;
   factionSyndicate: Faction;
-  platinumPerStanding: number;
+  standingPerPlatinum: number;
   standing: number;
-  lowestFourAverage: number;
+  priceAverage: number;
 }

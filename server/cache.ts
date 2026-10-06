@@ -1,10 +1,10 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { Faction, SyndicateItem } from './types.js';
 import { WIKI_CACHE_PATH } from './config.js';
+import { logError, logWarn } from './logger.js';
 
-const cachePath = fileURLToPath(WIKI_CACHE_PATH);
+const cachePath = WIKI_CACHE_PATH;
 export const CACHE_VERSION = 1;
 
 export async function readCache(): Promise<SyndicateItem[] | null> {
@@ -12,10 +12,12 @@ export async function readCache(): Promise<SyndicateItem[] | null> {
     const data = await readFile(cachePath, 'utf8');
     const parsed = JSON.parse(data) as { version: number; items: SyndicateItem[] };
     if (parsed.version !== CACHE_VERSION || !Array.isArray(parsed.items)) {
+      logWarn(`Ignoring invalid syndicate cache at ${cachePath}: unsupported version or invalid items.`);
       return null;
     }
     return parsed.items;
-  } catch {
+  } catch (error) {
+    logError(`Unable to read syndicate cache at ${cachePath}.`, error);
     return null;
   }
 }
