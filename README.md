@@ -10,9 +10,14 @@ WM.SPO is a dark-themed React and Node.js application for finding syndicate offe
 - Refreshes the wiki-derived cache only when the user clicks **Refresh wiki cache**.
 - Displays up to 10 items per selected faction, then sorts all displayed results together by Standing per Platinum in ascending order (the lowest standing cost per platinum comes first).
 - Uses the Warframe.market public v2 catalog and order endpoints.
+- Fetches current Warframe.market order data on each ranking request without browser or intermediary caching.
+- Limits all Warframe.market requests to a maximum of three per second, including concurrent ranking requests.
+- Fetches the Warframe.market catalog only when an offering needs name-based matching, then reuses it for the server process lifetime.
+- Retries rate-limited Warframe.market requests after the `Retry-After` delay, with exponential backoff when that header is absent.
+- Debounces faction selection changes and cancels stale ranking requests so outdated results do not replace current selections.
 - Calculates prices using only visible sell orders from sellers whose Warframe.market status is `ingame`.
-- Excludes offerings with fewer than four distinct active online-in-game sellers. If a seller has multiple visible sell orders for an offering, only that seller's lowest price is counted.
-- Calculates **Platinum Price Average** from the four lowest qualifying seller prices, then calculates **Standing per Platinum** as `standing cost ÷ platinum price average`.
+- Excludes offerings with fewer than three distinct active online-in-game sellers. If a seller has multiple visible sell orders for an offering, only that seller's lowest price is counted.
+- Calculates **Platinum Price Average** from the three lowest qualifying seller prices, then calculates **Standing per Platinum** as `standing cost ÷ platinum price average`.
 
 The results table shows Item Name, Faction, Standing Cost, Platinum Price Average, and Standing per Platinum, in that order. A lower Standing per Platinum value indicates a better standing-to-platinum exchange.
 

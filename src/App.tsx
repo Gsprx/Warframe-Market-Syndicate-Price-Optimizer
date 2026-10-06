@@ -43,6 +43,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<ApiError>('');
   const [cached, setCached] = useState(false);
+  const [rankingRefreshVersion, setRankingRefreshVersion] = useState(0);
 
   const selectedFactionCount = factions.length;
 
@@ -53,27 +54,41 @@ export default function App() {
     return { best, average, total: items.length };
   }, [items]);
 
-  const loadRankings = async () => {
+  useEffect(() => {
     if (factions.length === 0) {
       setItems([]);
+      setLoading(false);
+      setError('');
       return;
     }
 
-    setLoading(true);
+    let active = true;
+    const controller = new AbortController();
     setError('');
-    try {
-      const query = new URLSearchParams({ factions: factions.join(',') });
-      const rankings = await api<{ items: RankedItem[]; factions: Faction[] }>(
-        `/api/ranked-items?${query.toString()}`
-      );
-      setItems(rankings.items);
-    } catch (requestError) {
-      const message = requestError instanceof Error ? requestError.message : 'Unable to load rankings.';
-      setError(message);
-    } finally {
-      setLoading(false);
-    }
-  };
+    setLoading(true);
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const query = new URLSearchParams({ factions: factions.join(',') });
+        const rankings = await api<{ items: RankedItem[]; factions: Faction[] }>(
+          `/api/ranked-items?${query.toString()}`,
+          { cache: 'no-store', signal: controller.signal }
+        );
+        if (active) setItems(rankings.items);
+      } catch (requestError) {
+        if (!active || (requestError instanceof DOMException && requestError.name === 'AbortError')) return;
+        const message = requestError instanceof Error ? requestError.message : 'Unable to load rankings.';
+        setError(message);
+      } finally {
+        if (active) setLoading(false);
+      }
+    }, 300);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, [factions, rankingRefreshVersion]);
 
   const toggleFaction = (faction: Faction) => {
     setFactions((current) =>
@@ -82,14 +97,6 @@ export default function App() {
         : [...current, faction]
     );
   };
-
-  useEffect(() => {
-    if (selectedFactionCount > 0) {
-      void loadRankings();
-    } else {
-      setItems([]);
-    }
-  }, [factions]);
 
   const refreshCache = async () => {
     setRefreshing(true);
@@ -100,7 +107,7 @@ export default function App() {
         { method: 'POST' }
       );
       setCached(response.refreshed);
-      await loadRankings();
+      setRankingRefreshVersion((version) => version + 1);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to refresh the wiki cache.');
     } finally {

@@ -44,6 +44,7 @@ app.get('/api/syndicate-items', async (req, res) => {
 });
 
 app.get('/api/ranked-items', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
   const factions = typeof req.query.factions === 'string' ? req.query.factions.split(',') : [];
   const filter = factions.filter((faction): faction is typeof SYNDICATE_FACTIONS[number] =>
     SYNDICATE_FACTIONS.includes(faction as typeof SYNDICATE_FACTIONS[number])

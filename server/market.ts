@@ -2,9 +2,44 @@ import { MarketItemListResponse, MarketOrder, RankedSyndicateItem, SyndicateItem
 import { logInfo, logWarn } from './logger.js';
 
 const MARKET_API = 'https://api.warframe.market/v2';
-const ORDER_REQUEST_BATCH_SIZE = 4;
+const MARKET_REQUEST_INTERVAL_MS = 350;
+const MAX_RATE_LIMIT_RETRIES = 3;
+const RATE_LIMIT_FALLBACK_MS = 1000;
 
-function getLowestFourAverage(orders: MarketOrder[]): number | null {
+let marketRequestQueue: Promise<void> = Promise.resolve();
+let nextMarketRequestAt = 0;
+let marketItemNameMapPromise: Promise<Map<string, string>> | undefined;
+
+function fetchMarket(url: string, init?: RequestInit): Promise<Response> {
+  const request = marketRequestQueue.then(async () => {
+    for (let attempt = 0; ; attempt += 1) {
+      const waitMs = Math.max(0, nextMarketRequestAt - Date.now());
+      if (waitMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
+      nextMarketRequestAt = Date.now() + MARKET_REQUEST_INTERVAL_MS;
+
+      const response = await fetch(url, init);
+      if (response.status !== 429 || attempt >= MAX_RATE_LIMIT_RETRIES) return response;
+
+      const retryAfter = response.headers.get('Retry-After');
+      const retryAfterSeconds = retryAfter === null ? Number.NaN : Number(retryAfter);
+      const retryAfterDate = retryAfter === null ? Number.NaN : Date.parse(retryAfter);
+      const retryDelayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+        ? retryAfterSeconds * 1000
+        : Number.isFinite(retryAfterDate)
+          ? Math.max(0, retryAfterDate - Date.now())
+          : RATE_LIMIT_FALLBACK_MS * (2 ** attempt);
+
+      nextMarketRequestAt = Math.max(nextMarketRequestAt, Date.now() + retryDelayMs);
+      logWarn(`Warframe.market rate limit reached; retrying ${url} after ${Math.ceil(retryDelayMs)}ms.`);
+    }
+  });
+  marketRequestQueue = request.then(() => undefined, () => undefined);
+  return request;
+}
+
+function getLowestThreeAverage(orders: MarketOrder[]): number | null {
   const pricesBySeller = new Map<string, number>();
   for (const order of orders) {
     if (
@@ -21,17 +56,17 @@ function getLowestFourAverage(orders: MarketOrder[]): number | null {
     }
   }
 
-  if (pricesBySeller.size < 4) return null;
+  if (pricesBySeller.size < 3) return null;
 
-  const lowestFourSellerPrices = [...pricesBySeller.values()]
+  const lowestThreeSellerPrices = [...pricesBySeller.values()]
     .sort((a, b) => a - b)
-    .slice(0, 4);
+    .slice(0, 3);
 
-  return lowestFourSellerPrices.reduce((sum, amount) => sum + amount, 0) / lowestFourSellerPrices.length;
+  return lowestThreeSellerPrices.reduce((sum, amount) => sum + amount, 0) / lowestThreeSellerPrices.length;
 }
 
 async function fetchMarketItemNameMap(): Promise<Map<string, string>> {
-  const response = await fetch(`${MARKET_API}/items`, {
+  const response = await fetchMarket(`${MARKET_API}/items`, {
     headers: {
       Accept: 'application/json',
       'User-Agent': 'WM.SPO/1.0 (syndicate price optimizer)'
@@ -49,10 +84,22 @@ async function fetchMarketItemNameMap(): Promise<Map<string, string>> {
   return nameMap;
 }
 
+function getMarketItemNameMap(): Promise<Map<string, string>> {
+  if (!marketItemNameMapPromise) {
+    const request = fetchMarketItemNameMap();
+    marketItemNameMapPromise = request;
+    void request.catch(() => {
+      if (marketItemNameMapPromise === request) marketItemNameMapPromise = undefined;
+    });
+  }
+  return marketItemNameMapPromise;
+}
+
 async function fetchMarketItem(urlName: string): Promise<MarketOrder[]> {
-  const response = await fetch(`${MARKET_API}/orders/item/${encodeURIComponent(urlName)}`, {
+  const response = await fetchMarket(`${MARKET_API}/orders/item/${encodeURIComponent(urlName)}`, {
     headers: {
       Accept: 'application/json',
+      'Cache-Control': 'no-cache',
       'User-Agent': 'WM.SPO/1.0 (syndicate price optimizer)'
     }
   });
@@ -67,7 +114,10 @@ export async function getRankedItems(items: SyndicateItem[]): Promise<RankedSynd
     return [];
   }
 
-  const marketNameMap = await fetchMarketItemNameMap();
+  const itemsNeedingLookup = items.filter((item) => item.standing > 0 && !item.marketItemUrl);
+  const marketNameMap = itemsNeedingLookup.length > 0
+    ? await getMarketItemNameMap()
+    : new Map<string, string>();
   const marketItems = items.flatMap((item) => {
     const normalizedName = item.itemName.replace(/\s*\([^)]*\)\s*$/, '').toLowerCase();
     const urlName = item.marketItemUrl
@@ -84,31 +134,26 @@ export async function getRankedItems(items: SyndicateItem[]): Promise<RankedSynd
   const results: RankedSyndicateItem[] = [];
   let failedOrderRequests = 0;
   let offersWithInsufficientSellers = 0;
-  for (let offset = 0; offset < marketItems.length; offset += ORDER_REQUEST_BATCH_SIZE) {
-    const batch = marketItems.slice(offset, offset + ORDER_REQUEST_BATCH_SIZE);
-    const batchResults = await Promise.all(batch.map(async ({ item, urlName }) => {
-      try {
-        const orders = await fetchMarketItem(urlName);
-        const lowestFourAverage = getLowestFourAverage(orders);
-        if (lowestFourAverage === null) {
-          offersWithInsufficientSellers += 1;
-          return null;
-        }
-
-        return {
-          itemName: item.itemName,
-          factionSyndicate: item.faction,
-          standingPerPlatinum: item.standing / lowestFourAverage,
-          standing: item.standing,
-          priceAverage: lowestFourAverage
-        };
-      } catch (error) {
-        failedOrderRequests += 1;
-        logWarn(`Unable to retrieve market orders for ${item.itemName} (${urlName}): ${error instanceof Error ? error.message : String(error)}`);
-        return null;
+  for (const { item, urlName } of marketItems) {
+    try {
+      const orders = await fetchMarketItem(urlName);
+      const lowestThreeAverage = getLowestThreeAverage(orders);
+      if (lowestThreeAverage === null) {
+        offersWithInsufficientSellers += 1;
+        continue;
       }
-    }));
-    results.push(...batchResults.filter((item): item is RankedSyndicateItem => item !== null));
+
+      results.push({
+        itemName: item.itemName,
+        factionSyndicate: item.faction,
+        standingPerPlatinum: item.standing / lowestThreeAverage,
+        standing: item.standing,
+        priceAverage: lowestThreeAverage
+      });
+    } catch (error) {
+      failedOrderRequests += 1;
+      logWarn(`Unable to retrieve market orders for ${item.itemName} (${urlName}): ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   const rankings = Object.entries(
@@ -127,6 +172,6 @@ export async function getRankedItems(items: SyndicateItem[]): Promise<RankedSynd
     || a.factionSyndicate.localeCompare(b.factionSyndicate)
     || a.itemName.localeCompare(b.itemName)
   );
-  logInfo(`Warframe.market ranking: ${results.length} offers with at least four distinct online-in-game sellers from ${marketItems.length} matched offers; ${offersWithInsufficientSellers} offers excluded for insufficient sellers; ${failedOrderRequests} order requests failed.`);
+  logInfo(`Warframe.market ranking: ${results.length} offers with at least three distinct online-in-game sellers from ${marketItems.length} matched offers; ${offersWithInsufficientSellers} offers excluded for insufficient sellers; ${failedOrderRequests} order requests failed.`);
   return rankings;
 }
